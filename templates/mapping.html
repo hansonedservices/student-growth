@@ -21,6 +21,7 @@
   <form method="POST">
     <input type="hidden" name="period" value="{{ period }}">
     <input type="hidden" name="filename" value="{{ filename }}">
+    <input type="hidden" name="grad_year" value="{{ grad_year or '' }}">
 
     <div class="form-group">
       <label>CSV Columns Detected</label>
@@ -32,9 +33,9 @@
     <div class="form-group">
       <label for="date_col">Date / Time Column</label>
       <select name="date_col" id="date_col" required>
-        <option value="" disabled selected>Select column…</option>
+        <option value="" disabled {% if not auto_date %}selected{% endif %}>Select column…</option>
         {% for h in headers %}
-        <option value="{{ h }}" {% if loop.first %}selected{% endif %}>{{ h }}</option>
+        <option value="{{ h }}" {% if h == auto_date %}selected{% endif %}>{{ h }}</option>
         {% endfor %}
       </select>
       <div class="form-hint">The column containing the assessment date and time (e.g. "2024-09-15 08:30:00"). The month and year will be used as the assessment period.</div>
@@ -43,9 +44,9 @@
     <div class="form-group">
       <label for="student_col">Email Address Column</label>
       <select name="student_col" id="student_col" required>
-        <option value="" disabled selected>Select column…</option>
+        <option value="" disabled {% if not auto_student %}selected{% endif %}>Select column…</option>
         {% for h in headers %}
-        <option value="{{ h }}">{{ h }}</option>
+        <option value="{{ h }}" {% if h == auto_student %}selected{% endif %}>{{ h }}</option>
         {% endfor %}
       </select>
       <div class="form-hint">The first 6 characters of this column will be used as the student identifier. No names are stored.</div>
@@ -54,9 +55,9 @@
     <div class="form-group">
       <label for="score_col">Score Column</label>
       <select name="score_col" id="score_col" required>
-        <option value="" disabled selected>Select column…</option>
+        <option value="" disabled {% if not auto_score %}selected{% endif %}>Select column…</option>
         {% for h in headers %}
-        <option value="{{ h }}">{{ h }}</option>
+        <option value="{{ h }}" {% if h == auto_score %}selected{% endif %}>{{ h }}</option>
         {% endfor %}
       </select>
       <div class="form-hint">The column containing the numeric assessment score.</div>

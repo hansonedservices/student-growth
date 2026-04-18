@@ -20,11 +20,12 @@
 
 {% if warn_overwrite %}
 <div class="alert alert-warn">
-  <strong>Data already exists for {{ warn_subject.capitalize() }} — {{ warn_period }}.</strong>
+  <strong>Data already exists for {{ warn_subject.capitalize() }}{% if warn_grad_year %} (Class of '{{ warn_grad_year }}){% endif %} — {{ warn_period }}.</strong>
   Uploading again will overwrite the existing scores for this period.
   <form method="POST" action="/upload" style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
     <input type="hidden" name="subject" value="{{ warn_subject }}">
     <input type="hidden" name="period" value="{{ warn_period }}">
+    <input type="hidden" name="grad_year" value="{{ warn_grad_year or '' }}">
     <input type="hidden" name="overwrite" value="yes">
     <button type="submit" class="btn btn-primary btn-sm">Yes, overwrite</button>
     <a href="/upload" class="btn btn-outline btn-sm">Cancel</a>
@@ -45,6 +46,12 @@
     </div>
 
     <div class="form-group">
+      <label for="grad_year">Graduation Year <span style="color:var(--gray-400);font-weight:400;">(optional)</span></label>
+      <input type="text" name="grad_year" id="grad_year" maxlength="4" placeholder="e.g. 31" style="max-width:120px;" autocomplete="off">
+      <div class="form-hint">Two-digit graduation year (e.g. 31 for Class of 2031). Auto-detected from filename if left blank.</div>
+    </div>
+
+    <div class="form-group">
       <label>CSV File</label>
       <label class="file-drop" id="dropLabel" for="fileInput">
         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto 8px; display:block; opacity:.4"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -61,7 +68,13 @@
 
 <script>
 document.getElementById('fileInput').addEventListener('change', function () {
-  document.getElementById('fileName').textContent = this.files[0]?.name || '';
+  const name = this.files[0]?.name || '';
+  document.getElementById('fileName').textContent = name;
+  const gradYearInput = document.getElementById('grad_year');
+  if (gradYearInput && !gradYearInput.value) {
+    const match = name.replace(/\.[^.]+$/, '').match(/\b(\d{2})\b/);
+    if (match) gradYearInput.value = match[1];
+  }
 });
 </script>
 {% endblock %}

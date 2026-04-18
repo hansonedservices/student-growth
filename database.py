@@ -7,7 +7,8 @@ DB_PATH = 'student_growth.db'
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS students (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    student_code TEXT UNIQUE NOT NULL
+    student_code TEXT UNIQUE NOT NULL,
+    grad_year TEXT
 );
 
 CREATE TABLE IF NOT EXISTS scores (
@@ -49,10 +50,14 @@ def get_conn():
 def init_db():
     with get_conn() as conn:
         conn.executescript(SCHEMA)
-        try:
-            conn.execute("ALTER TABLE column_mappings ADD COLUMN date_col TEXT NOT NULL DEFAULT ''")
-        except Exception:
-            pass
+        for migration in [
+            "ALTER TABLE column_mappings ADD COLUMN date_col TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE students ADD COLUMN grad_year TEXT",
+        ]:
+            try:
+                conn.execute(migration)
+            except Exception:
+                pass
 
 
 def get_column_mapping(subject):
@@ -71,14 +76,28 @@ def save_column_mapping(subject, student_col, score_col, date_col):
         )
 
 
-def insert_scores(records):
+def get_all_grad_years():
+    with get_conn() as conn:
+        rows = conn.execute(
+            'SELECT DISTINCT grad_year FROM students WHERE grad_year IS NOT NULL ORDER BY grad_year'
+        ).fetchall()
+        return [r['grad_year'] for r in rows]
+
+
+def insert_scores(records, grad_year=None):
     """records: list of (student_code, subject, period, score)"""
     now = datetime.now().isoformat()
     with get_conn() as conn:
         for student_code, subject, period, score in records:
             conn.execute(
-                'INSERT OR IGNORE INTO students (student_code) VALUES (?)', (student_code,)
+                'INSERT OR IGNORE INTO students (student_code, grad_year) VALUES (?, ?)',
+                (student_code, grad_year)
             )
+            if grad_year:
+                conn.execute(
+                    'UPDATE students SET grad_year = ? WHERE student_code = ? AND grad_year IS NULL',
+                    (grad_year, student_code)
+                )
             student_id = conn.execute(
                 'SELECT id FROM students WHERE student_code = ?', (student_code,)
             ).fetchone()['id']
@@ -91,12 +110,20 @@ def insert_scores(records):
             )
 
 
-def check_period_exists(subject, period):
+def check_period_exists(subject, period, grad_year=None):
     with get_conn() as conn:
-        row = conn.execute(
-            'SELECT COUNT(*) as cnt FROM scores WHERE subject = ? AND period = ?',
-            (subject, period)
-        ).fetchone()
+        if grad_year:
+            row = conn.execute(
+                '''SELECT COUNT(*) as cnt FROM scores s
+                   JOIN students st ON st.id = s.student_id
+                   WHERE s.subject = ? AND s.period = ? AND st.grad_year = ?''',
+                (subject, period, grad_year)
+            ).fetchone()
+        else:
+            row = conn.execute(
+                'SELECT COUNT(*) as cnt FROM scores WHERE subject = ? AND period = ?',
+                (subject, period)
+            ).fetchone()
         return row['cnt'] > 0
 
 
@@ -125,11 +152,16 @@ def get_all_periods():
         return [r['period'] for r in rows]
 
 
-def get_dashboard_data(subject=None):
+def get_dashboard_data(subject=None, grad_year=None):
     with get_conn() as conn:
-        students = conn.execute(
-            'SELECT * FROM students ORDER BY student_code'
-        ).fetchall()
+        if grad_year:
+            students = conn.execute(
+                'SELECT * FROM students WHERE grad_year = ? ORDER BY student_code', (grad_year,)
+            ).fetchall()
+        else:
+            students = conn.execute(
+                'SELECT * FROM students ORDER BY student_code'
+            ).fetchall()
         subjects = [subject] if subject else SUBJECTS
 
         result = []
@@ -174,7 +206,7 @@ def get_dashboard_data(subject=None):
         return result
 
 
-def get_summary_stats(subject=None):
+def get_summary_stats(subject=None, grad_year=None):
     with get_conn() as conn:
         subjects = [subject] if subject else SUBJECTS
 
@@ -183,22 +215,34 @@ def get_summary_stats(subject=None):
         flagged_students = set()
 
         for subj in subjects:
-            rows = conn.execute('''
-                SELECT s.student_id, s.score, s.uploaded_at
-                FROM scores s
-                WHERE s.subject = ?
-                  AND s.period = (
-                      SELECT MAX(period) FROM scores
-                      WHERE subject = ? AND student_id = s.student_id
-                  )
-            ''', (subj, subj)).fetchall()
+            if grad_year:
+                rows = conn.execute('''
+                    SELECT s.student_id, s.score, s.uploaded_at
+                    FROM scores s
+                    JOIN students st ON st.id = s.student_id
+                    WHERE s.subject = ? AND st.grad_year = ?
+                      AND s.period = (
+                          SELECT MAX(period) FROM scores
+                          WHERE subject = ? AND student_id = s.student_id
+                      )
+                ''', (subj, grad_year, subj)).fetchall()
+            else:
+                rows = conn.execute('''
+                    SELECT s.student_id, s.score, s.uploaded_at
+                    FROM scores s
+                    WHERE s.subject = ?
+                      AND s.period = (
+                          SELECT MAX(period) FROM scores
+                          WHERE subject = ? AND student_id = s.student_id
+                      )
+                ''', (subj, subj)).fetchall()
 
             for r in rows:
                 all_latest_scores.append(r['score'])
                 if last_upload is None or r['uploaded_at'] > last_upload:
                     last_upload = r['uploaded_at']
 
-        dashboard = get_dashboard_data(subject)
+        dashboard = get_dashboard_data(subject, grad_year)
         for student in dashboard:
             if student['flagged']:
                 flagged_students.add(student['student_code'])

@@ -31,11 +31,21 @@
   </div>
 </div>
 
+<!-- Grad Year Filter Tabs -->
+{% if grad_years %}
+<div class="tabs" style="margin-bottom:6px;">
+  <a href="/?subject={{ subject }}&grad_year=all" class="tab {% if grad_year == 'all' %}active{% endif %}">All Classes</a>
+  {% for gy in grad_years %}
+  <a href="/?subject={{ subject }}&grad_year={{ gy }}" class="tab {% if grad_year == gy %}active{% endif %}">Class of '{{ gy }}</a>
+  {% endfor %}
+</div>
+{% endif %}
+
 <!-- Subject Filter Tabs -->
 <div class="tabs">
-  <a href="/?subject=all" class="tab {% if subject == 'all' %}active{% endif %}">All Subjects</a>
+  <a href="/?subject=all&grad_year={{ grad_year }}" class="tab {% if subject == 'all' %}active{% endif %}">All Subjects</a>
   {% for s in subjects %}
-  <a href="/?subject={{ s }}" class="tab {% if subject == s %}active{% endif %}">{{ s.capitalize() }}</a>
+  <a href="/?subject={{ s }}&grad_year={{ grad_year }}" class="tab {% if subject == s %}active{% endif %}">{{ s.capitalize() }}</a>
   {% endfor %}
 </div>
 

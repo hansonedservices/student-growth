@@ -51,7 +51,13 @@ def parse_period(date_str):
     raise ValueError(f"Unrecognized date format: '{date_str}'")
 
 
-def process_csv(rows, subject, student_col, score_col, date_col):
+def detect_grad_year(filename):
+    name = os.path.splitext(filename)[0]
+    match = re.search(r'\b(\d{2})\b', name)
+    return match.group(1) if match else None
+
+
+def process_csv(rows, subject, student_col, score_col, date_col, grad_year=None):
     errors = []
     records = []
     for i, row in enumerate(rows):
@@ -71,17 +77,20 @@ def process_csv(rows, subject, student_col, score_col, date_col):
         except ValueError as e:
             errors.append(f"Row {i + 2}: {e}")
     if not errors:
-        db.insert_scores(records)
+        db.insert_scores(records, grad_year=grad_year)
     return errors
 
 
 @app.route('/')
 def dashboard():
     subject = request.args.get('subject', 'all')
+    grad_year = request.args.get('grad_year', 'all')
     filter_subject = subject if subject != 'all' else None
-    students = db.get_dashboard_data(filter_subject)
-    summary = db.get_summary_stats(filter_subject)
+    filter_grad_year = grad_year if grad_year != 'all' else None
+    students = db.get_dashboard_data(filter_subject, filter_grad_year)
+    summary = db.get_summary_stats(filter_subject, filter_grad_year)
     display_subjects = [filter_subject] if filter_subject else db.SUBJECTS
+    grad_years = db.get_all_grad_years()
 
     all_periods = sorted(set(
         period
@@ -95,6 +104,8 @@ def dashboard():
                            students=students,
                            summary=summary,
                            subject=subject,
+                           grad_year=grad_year,
+                           grad_years=grad_years,
                            subjects=db.SUBJECTS,
                            display_subjects=display_subjects,
                            all_periods=all_periods)
@@ -104,6 +115,7 @@ def dashboard():
 def upload():
     if request.method == 'POST':
         subject = request.form.get('subject', '').strip()
+        grad_year = request.form.get('grad_year', '').strip() or None
         file = request.files.get('file')
         overwrite = request.form.get('overwrite') == 'yes'
 
@@ -113,6 +125,9 @@ def upload():
 
         if subject not in db.SUBJECTS:
             return render_template('upload.html', subjects=db.SUBJECTS, error='Invalid subject.')
+
+        if not grad_year:
+            grad_year = detect_grad_year(file.filename)
 
         try:
             content = file.read().decode('utf-8-sig')
@@ -134,22 +149,24 @@ def upload():
             with open(temp_path, 'w', newline='', encoding='utf-8') as f:
                 f.write(content)
             return redirect(url_for('column_mapping', subject=subject,
-                                    filename=os.path.basename(temp_path)))
+                                    filename=os.path.basename(temp_path),
+                                    grad_year=grad_year or ''))
 
         # Check for duplicate period using first row's date
         if not overwrite and rows:
             try:
                 first_period = parse_period(str(rows[0][mapping['date_col']]))
-                if db.check_period_exists(subject, first_period):
+                if db.check_period_exists(subject, first_period, grad_year):
                     return render_template('upload.html', subjects=db.SUBJECTS,
                                            warn_overwrite=True,
                                            warn_subject=subject,
-                                           warn_period=first_period)
+                                           warn_period=first_period,
+                                           warn_grad_year=grad_year)
             except (ValueError, KeyError):
                 pass
 
         errors = process_csv(rows, subject, mapping['student_col'],
-                             mapping['score_col'], mapping['date_col'])
+                             mapping['score_col'], mapping['date_col'], grad_year)
         if errors:
             return render_template('upload.html', subjects=db.SUBJECTS, errors=errors[:10])
         return redirect(url_for('dashboard'))
@@ -160,6 +177,7 @@ def upload():
 @app.route('/upload/map/<subject>', methods=['GET', 'POST'])
 def column_mapping(subject):
     filename = request.args.get('filename') or request.form.get('filename', '')
+    grad_year = request.args.get('grad_year') or request.form.get('grad_year') or None
     filepath = os.path.join('uploads', os.path.basename(filename))
 
     if not os.path.exists(filepath):
@@ -177,13 +195,15 @@ def column_mapping(subject):
 
         if not student_col or not score_col or not date_col:
             return render_template('mapping.html', subject=subject, headers=headers,
-                                   filename=filename, error='Please select all three columns.')
+                                   filename=filename, grad_year=grad_year,
+                                   error='Please select all three columns.')
         if len({student_col, score_col, date_col}) < 3:
             return render_template('mapping.html', subject=subject, headers=headers,
-                                   filename=filename, error='Each column must be different.')
+                                   filename=filename, grad_year=grad_year,
+                                   error='Each column must be different.')
 
         db.save_column_mapping(subject, student_col, score_col, date_col)
-        errors = process_csv(rows, subject, student_col, score_col, date_col)
+        errors = process_csv(rows, subject, student_col, score_col, date_col, grad_year)
         try:
             os.remove(filepath)
         except OSError:
@@ -191,11 +211,23 @@ def column_mapping(subject):
 
         if errors:
             return render_template('mapping.html', subject=subject, headers=headers,
-                                   filename=filename, errors=errors[:10])
+                                   filename=filename, grad_year=grad_year, errors=errors[:10])
         return redirect(url_for('dashboard'))
 
+    def auto_match(headers, keywords):
+        for h in headers:
+            if any(k in h.lower() for k in keywords):
+                return h
+        return None
+
+    auto_student = auto_match(headers, ['email'])
+    auto_score = auto_match(headers, ['score'])
+    auto_date = auto_match(headers, ['date', 'time', 'timestamp'])
+
     return render_template('mapping.html', subject=subject, headers=headers,
-                           filename=filename)
+                           filename=filename, grad_year=grad_year,
+                           auto_student=auto_student,
+                           auto_score=auto_score, auto_date=auto_date)
 
 
 @app.route('/student/<code>')
