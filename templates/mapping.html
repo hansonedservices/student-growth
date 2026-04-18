@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Map Columns — Student Growth Tracker{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Map CSV Columns</h1>
+  <p>This is the first upload for <strong>{{ subject.capitalize() }}</strong>. Tell us which columns contain the student code and score.</p>
+</div>
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+{% if errors %}
+<div class="alert alert-error">
+  <strong>Processing errors:</strong>
+  <ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<div class="form-card">
+  <form method="POST">
+    <input type="hidden" name="period" value="{{ period }}">
+    <input type="hidden" name="filename" value="{{ filename }}">
+
+    <div class="form-group">
+      <label>CSV Columns Detected</label>
+      <div style="background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: 7px; padding: 10px 14px; font-family: monospace; font-size: 13px; color: var(--gray-700);">
+        {{ headers | join(', ') }}
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="date_col">Date / Time Column</label>
+      <select name="date_col" id="date_col" required>
+        <option value="" disabled selected>Select column…</option>
+        {% for h in headers %}
+        <option value="{{ h }}" {% if loop.first %}selected{% endif %}>{{ h }}</option>
+        {% endfor %}
+      </select>
+      <div class="form-hint">The column containing the assessment date and time (e.g. "2024-09-15 08:30:00"). The month and year will be used as the assessment period.</div>
+    </div>
+
+    <div class="form-group">
+      <label for="student_col">Email Address Column</label>
+      <select name="student_col" id="student_col" required>
+        <option value="" disabled selected>Select column…</option>
+        {% for h in headers %}
+        <option value="{{ h }}">{{ h }}</option>
+        {% endfor %}
+      </select>
+      <div class="form-hint">The first 6 characters of this column will be used as the student identifier. No names are stored.</div>
+    </div>
+
+    <div class="form-group">
+      <label for="score_col">Score Column</label>
+      <select name="score_col" id="score_col" required>
+        <option value="" disabled selected>Select column…</option>
+        {% for h in headers %}
+        <option value="{{ h }}">{{ h }}</option>
+        {% endfor %}
+      </select>
+      <div class="form-hint">The column containing the numeric assessment score.</div>
+    </div>
+
+    <p style="font-size: 12px; color: var(--gray-400); margin-bottom: 16px;">
+      This mapping will be saved and applied automatically to all future <strong>{{ subject.capitalize() }}</strong> uploads.
+    </p>
+
+    <div style="display:flex; gap:10px;">
+      <button type="submit" class="btn btn-primary">Save Mapping &amp; Import</button>
+      <a href="/upload" class="btn btn-outline">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

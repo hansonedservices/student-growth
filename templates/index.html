@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Student Growth Tracker{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Class Dashboard</h1>
+  <p>Track student performance and growth across reading, writing, and language.</p>
+</div>
+
+<!-- Summary Cards -->
+<div class="summary-grid">
+  <div class="summary-card blue">
+    <div class="label">Class Average</div>
+    <div class="value">{{ summary.avg }}</div>
+    <div class="sub">across all subjects</div>
+  </div>
+  <div class="summary-card green">
+    <div class="label">At or Above Proficiency</div>
+    <div class="value">{{ summary.pct_proficient }}%</div>
+    <div class="sub">score ≥ 3 out of 4</div>
+  </div>
+  <div class="summary-card red" id="flaggedCard" style="cursor:pointer;" title="Click to filter flagged students">
+    <div class="label">Flagged Students</div>
+    <div class="value">{{ summary.flagged_count }}</div>
+    <div class="sub">regression or flat growth</div>
+  </div>
+  <div class="summary-card">
+    <div class="label">Last Upload</div>
+    <div class="value" style="font-size:18px;">{{ summary.last_upload }}</div>
+    <div class="sub">{{ summary.total_students }} students total</div>
+  </div>
+</div>
+
+<!-- Subject Filter Tabs -->
+<div class="tabs">
+  <a href="/?subject=all" class="tab {% if subject == 'all' %}active{% endif %}">All Subjects</a>
+  {% for s in subjects %}
+  <a href="/?subject={{ s }}" class="tab {% if subject == s %}active{% endif %}">{{ s.capitalize() }}</a>
+  {% endfor %}
+</div>
+
+<!-- Roster Table -->
+<div class="table-card">
+  <div class="table-toolbar">
+    <h2>Student Roster</h2>
+    <div class="filter-row">
+      <select class="filter-select" id="profFilter">
+        <option value="all">All proficiency levels</option>
+        <option value="proficient">Proficient</option>
+        <option value="approaching">Approaching</option>
+        <option value="below">Below</option>
+        <option value="flagged">Flagged only</option>
+      </select>
+      <a href="{{ url_for('class_report') }}" class="btn btn-outline btn-sm">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Class Report
+      </a>
+    </div>
+  </div>
+
+  {% if students %}
+  <div class="table-wrap">
+    <table id="rosterTable">
+      <thead>
+        <tr>
+          <th onclick="sortTable(0)">Student <span class="sort-icon">↕</span></th>
+          {% if subject == 'all' %}
+            {% for s in subjects %}
+              {% for p in all_periods %}
+              <th onclick="sortTable({{ loop.index + (loop.revindex0 * 0) }})">{{ s.capitalize() }}<br><span style="font-weight:400;font-size:10px;">{{ p|format_period }}</span></th>
+              {% endfor %}
+            {% endfor %}
+          {% else %}
+            {% for p in all_periods %}
+            <th onclick="sortTable({{ loop.index }})">{{ p|format_period }} <span class="sort-icon">↕</span></th>
+            {% endfor %}
+          {% endif %}
+          <th>Growth</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for student in students %}
+        <tr data-flagged="{{ 'true' if student.flagged else 'false' }}"
+            data-prof="{% if subject != 'all' %}{% set d = student.subjects.get(subject) %}{{ d.proficiency if d else 'none' }}{% else %}all{% endif %}">
+          <td>
+            <a href="{{ url_for('student_detail', code=student.student_code) }}" class="student-link">
+              {{ student.student_code }}
+            </a>
+          </td>
+
+          {% if subject == 'all' %}
+            {% for s in subjects %}
+              {% set d = student.subjects.get(s) %}
+              {% set score_map = {} %}
+              {% if d %}{% for p, sc in d.all_scores %}{% set _ = score_map.update({p: sc}) %}{% endfor %}{% endif %}
+              {% for p in all_periods %}
+                {% set sc = score_map.get(p) %}
+                <td>
+                  {% if sc is not none %}
+                    {% if sc >= 3 %}{% set cls = 'proficient' %}{% elif sc >= 2 %}{% set cls = 'approaching' %}{% else %}{% set cls = 'below' %}{% endif %}
+                    <span class="score-val {{ cls }}-score">{{ "%.1f"|format(sc) }}</span>
+                  {% else %}<span style="color:var(--gray-400)">—</span>{% endif %}
+                </td>
+              {% endfor %}
+            {% endfor %}
+          {% else %}
+            {% set d = student.subjects.get(subject) %}
+            {% set score_map = {} %}
+            {% if d %}{% for p, sc in d.all_scores %}{% set _ = score_map.update({p: sc}) %}{% endfor %}{% endif %}
+            {% for i, p in all_periods|enumerate %}
+              {% set sc = score_map.get(p) %}
+              {% set prev_sc = score_map.get(all_periods[i-1]) if i > 0 else none %}
+              <td>
+                {% if sc is not none %}
+                  {% if sc >= 3 %}{% set cls = 'proficient' %}{% elif sc >= 2 %}{% set cls = 'approaching' %}{% else %}{% set cls = 'below' %}{% endif %}
+                  <div class="score-cell">
+                    <span class="score-val {{ cls }}-score">{{ "%.1f"|format(sc) }}</span>
+                    {% if prev_sc is not none %}
+                      {% set delta = sc - prev_sc %}
+                      <span class="growth-delta {% if delta > 0 %}pos{% elif delta < 0 %}neg{% else %}zero{% endif %}">{{ "%+.1f"|format(delta) }}</span>
+                    {% endif %}
+                  </div>
+                {% else %}<span style="color:var(--gray-400)">—</span>{% endif %}
+              </td>
+            {% endfor %}
+          {% endif %}
+
+          <td>
+            {% if subject == 'all' %}
+              {# show overall growth across all subjects combined #}
+              {% set ns = namespace(first=none, last=none) %}
+              {% for s in subjects %}
+                {% set d = student.subjects.get(s) %}
+                {% if d and d.all_scores %}
+                  {% if ns.first is none %}{% set ns.first = d.all_scores[0][1] %}{% endif %}
+                  {% set ns.last = d.all_scores[-1][1] %}
+                {% endif %}
+              {% endfor %}
+              {% if ns.first is not none and ns.last is not none %}
+                {% set og = ns.last - ns.first %}
+                <span class="growth-delta {% if og > 0 %}pos{% elif og < 0 %}neg{% else %}zero{% endif %}">{{ "%+.1f"|format(og) }}</span>
+              {% else %}—{% endif %}
+            {% else %}
+              {% set d = student.subjects.get(subject) %}
+              {% if d and d.overall_growth is not none %}
+                <span class="growth-delta {% if d.overall_growth > 0 %}pos{% elif d.overall_growth < 0 %}neg{% else %}zero{% endif %}">{{ "%+.1f"|format(d.overall_growth) }}</span>
+              {% else %}—{% endif %}
+            {% endif %}
+          </td>
+          <td>
+            {% if student.flagged %}
+            <span class="badge flagged">⚑ Flagged</span>
+            {% else %}
+            <span class="badge ok">✓ On Track</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+    <h3>No data yet</h3>
+    <p><a href="{{ url_for('upload') }}">Upload a CSV file</a> to get started.</p>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+const flaggedCard = document.getElementById('flaggedCard');
+if (flaggedCard) {
+  flaggedCard.addEventListener('click', function () {
+    const sel = document.getElementById('profFilter');
+    if (sel) {
+      sel.value = sel.value === 'flagged' ? 'all' : 'flagged';
+      sel.dispatchEvent(new Event('change'));
+    }
+  });
+}
+
+const profFilter = document.getElementById('profFilter');
+if (profFilter) {
+  profFilter.addEventListener('change', function () {
+    const val = this.value;
+    document.querySelectorAll('#rosterTable tbody tr').forEach(row => {
+      if (val === 'all') { row.style.display = ''; return; }
+      if (val === 'flagged') { row.style.display = row.dataset.flagged === 'true' ? '' : 'none'; return; }
+      row.style.display = row.dataset.prof === val ? '' : 'none';
+    });
+  });
+}
+
+let sortDir = {};
+function sortTable(col) {
+  const table = document.getElementById('rosterTable');
+  const tbody = table.tBodies[0];
+  const rows = Array.from(tbody.rows);
+  sortDir[col] = !sortDir[col];
+  rows.sort((a, b) => {
+    const av = a.cells[col]?.textContent.trim() || '';
+    const bv = b.cells[col]?.textContent.trim() || '';
+    const an = parseFloat(av), bn = parseFloat(bv);
+    const cmp = isNaN(an) || isNaN(bn) ? av.localeCompare(bv) : an - bn;
+    return sortDir[col] ? cmp : -cmp;
+  });
+  rows.forEach(r => tbody.appendChild(r));
+}
+</script>
+{% endblock %}
