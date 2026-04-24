@@ -31,6 +31,111 @@
   </div>
 </div>
 
+<!-- MARKER-TEST -->
+{% if students %}
+<!-- Charts Section -->
+<div class="charts-section">
+  <div class="chart-card">
+    <div class="chart-title">Class Score Trends</div>
+    <div class="chart-sub">Average score per assessment period by subject</div>
+    <div class="chart-wrap"><canvas id="trendChart"></canvas></div>
+  </div>
+  <div class="charts-row">
+    <div class="chart-card" style="margin-bottom:0">
+      <div class="chart-title">Proficiency Breakdown</div>
+      <div class="chart-sub">Students at each level (current snapshot)</div>
+      <div class="chart-wrap-sm"><canvas id="profChart"></canvas></div>
+    </div>
+    <div class="chart-card" style="margin-bottom:0">
+      <div class="chart-title">Student Growth</div>
+      <div class="chart-sub">First to latest assessment — growing, flat, or declining</div>
+      <div class="chart-wrap-sm"><canvas id="growthChart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+const SUBJ_COLORS = {
+  reading:  { border: '#2563eb', bg: 'rgba(37,99,235,0.12)' },
+  writing:  { border: '#7c3aed', bg: 'rgba(124,58,237,0.12)' },
+  language: { border: '#059669', bg: 'rgba(5,150,105,0.12)' },
+};
+
+/* Trend Chart */
+const periodAvgs = {{ period_avgs | tojson }};
+const displaySubjects = {{ display_subjects | tojson }};
+const allPeriods = [...new Set(periodAvgs.map(d => d.period))].sort();
+const periodLabels = allPeriods.map(p => {
+  const [y, m] = p.split('-');
+  return new Date(+y, +m - 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+});
+new Chart(document.getElementById('trendChart'), {
+  type: 'line',
+  data: {
+    labels: periodLabels,
+    datasets: displaySubjects.map(subj => {
+      const byPeriod = {};
+      periodAvgs.filter(d => d.subject === subj).forEach(d => byPeriod[d.period] = d.avg_score);
+      const c = SUBJ_COLORS[subj] || { border: '#6b7280', bg: 'rgba(107,114,128,0.12)' };
+      return {
+        label: subj.charAt(0).toUpperCase() + subj.slice(1),
+        data: allPeriods.map(p => byPeriod[p] ?? null),
+        borderColor: c.border, backgroundColor: c.bg,
+        fill: true, tension: 0.35, spanGaps: true,
+        pointRadius: 5, pointHoverRadius: 7,
+      };
+    })
+  },
+  options: {
+    responsive: true, maintainAspectRatio: true,
+    scales: { y: { min: 0, max: 4, ticks: { stepSize: 1 }, title: { display: true, text: 'Avg Score' } } },
+    plugins: { legend: { position: 'top' } }
+  }
+});
+
+/* Proficiency Chart */
+const profDist = {{ prof_dist | tojson }};
+const profSubjs = Object.keys(profDist);
+new Chart(document.getElementById('profChart'), {
+  type: 'bar',
+  data: {
+    labels: profSubjs.map(s => s.charAt(0).toUpperCase() + s.slice(1)),
+    datasets: [
+      { label: 'Proficient (≥3)', data: profSubjs.map(s => profDist[s].proficient), backgroundColor: 'rgba(22,163,74,0.82)' },
+      { label: 'Approaching (2–3)', data: profSubjs.map(s => profDist[s].approaching), backgroundColor: 'rgba(202,138,4,0.82)' },
+      { label: 'Below (<2)', data: profSubjs.map(s => profDist[s].below), backgroundColor: 'rgba(220,38,38,0.82)' },
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    scales: { x: { stacked: true }, y: { stacked: true, title: { display: true, text: 'Students' } } },
+    plugins: { legend: { position: 'top' } }
+  }
+});
+
+/* Growth Chart */
+const growthDist = {{ growth_dist | tojson }};
+const growthSubjs = Object.keys(growthDist);
+new Chart(document.getElementById('growthChart'), {
+  type: 'bar',
+  data: {
+    labels: growthSubjs.map(s => s.charAt(0).toUpperCase() + s.slice(1)),
+    datasets: [
+      { label: 'Growing', data: growthSubjs.map(s => growthDist[s].growing), backgroundColor: 'rgba(22,163,74,0.82)' },
+      { label: 'Flat', data: growthSubjs.map(s => growthDist[s].flat), backgroundColor: 'rgba(148,163,184,0.82)' },
+      { label: 'Declining', data: growthSubjs.map(s => growthDist[s].declining), backgroundColor: 'rgba(220,38,38,0.82)' },
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    scales: { x: { stacked: true }, y: { stacked: true, title: { display: true, text: 'Students' } } },
+    plugins: { legend: { position: 'top' } }
+  }
+});
+</script>
+{% endif %}
+
 <!-- Grad Year Filter Tabs -->
 {% if grad_years %}
 <div class="tabs" style="margin-bottom:6px;">

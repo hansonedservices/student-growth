@@ -83,6 +83,7 @@ def process_csv(rows, subject, student_col, score_col, date_col, grad_year=None)
 
 @app.route('/')
 def dashboard():
+    import sys; print("MAIN_APP_RUNNING", sys.argv[0], file=sys.stderr)
     subject = request.args.get('subject', 'all')
     grad_year = request.args.get('grad_year', 'all')
     filter_subject = subject if subject != 'all' else None
@@ -100,6 +101,27 @@ def dashboard():
         for period, _ in subj_data.get('all_scores', [])
     ))
 
+    period_avgs = db.get_period_averages(filter_subject, filter_grad_year)
+
+    prof_dist = {}
+    growth_dist = {}
+    for s in display_subjects:
+        p_counts = {'proficient': 0, 'approaching': 0, 'below': 0}
+        g_counts = {'growing': 0, 'flat': 0, 'declining': 0}
+        for student in students:
+            d = student['subjects'].get(s)
+            if d:
+                p_counts[d['proficiency']] += 1
+                if d['overall_growth'] is not None:
+                    if d['overall_growth'] > 0:
+                        g_counts['growing'] += 1
+                    elif d['overall_growth'] < 0:
+                        g_counts['declining'] += 1
+                    else:
+                        g_counts['flat'] += 1
+        prof_dist[s] = p_counts
+        growth_dist[s] = g_counts
+
     return render_template('index.html',
                            students=students,
                            summary=summary,
@@ -108,7 +130,10 @@ def dashboard():
                            grad_years=grad_years,
                            subjects=db.SUBJECTS,
                            display_subjects=display_subjects,
-                           all_periods=all_periods)
+                           all_periods=all_periods,
+                           period_avgs=period_avgs,
+                           prof_dist=prof_dist,
+                           growth_dist=growth_dist)
 
 
 @app.route('/upload', methods=['GET', 'POST'])
@@ -271,4 +296,5 @@ def class_report():
 
 if __name__ == '__main__':
     db.init_db()
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(debug=False, host='0.0.0.0', port=port)

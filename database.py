@@ -269,6 +269,28 @@ def get_summary_stats(subject=None, grad_year=None):
         }
 
 
+def get_period_averages(subject=None, grad_year=None):
+    with get_conn() as conn:
+        conditions = []
+        params = []
+        if subject:
+            conditions.append("s.subject = ?")
+            params.append(subject)
+        if grad_year:
+            conditions.append("st.grad_year = ?")
+            params.append(grad_year)
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        rows = conn.execute(f"""
+            SELECT s.subject, s.period, ROUND(AVG(s.score), 2) as avg_score
+            FROM scores s
+            JOIN students st ON s.student_id = st.id
+            {where}
+            GROUP BY s.subject, s.period
+            ORDER BY s.subject, s.period
+        """, params).fetchall()
+        return [dict(r) for r in rows]
+
+
 def get_all_scores_for_report():
     with get_conn() as conn:
         rows = conn.execute('''
