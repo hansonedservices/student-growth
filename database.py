@@ -1,35 +1,36 @@
-import sqlite3
+import os
 from contextlib import contextmanager
 from datetime import datetime
 
-DB_PATH = 'student_growth.db'
+import psycopg2
+import psycopg2.extras
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS students (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    student_code TEXT UNIQUE NOT NULL,
-    grad_year TEXT
-);
+_raw_url = os.environ.get('DATABASE_URL', '')
+DATABASE_URL = _raw_url.replace('postgres://', 'postgresql://', 1) if _raw_url.startswith('postgres://') else _raw_url
 
-CREATE TABLE IF NOT EXISTS scores (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    student_id INTEGER NOT NULL,
-    subject TEXT NOT NULL,
-    period TEXT NOT NULL,
-    score REAL NOT NULL,
-    uploaded_at TEXT NOT NULL,
-    FOREIGN KEY (student_id) REFERENCES students(id),
-    UNIQUE(student_id, subject, period)
-);
-
-CREATE TABLE IF NOT EXISTS column_mappings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    subject TEXT NOT NULL UNIQUE,
-    student_col TEXT NOT NULL,
-    score_col TEXT NOT NULL,
-    date_col TEXT NOT NULL DEFAULT ''
-);
-"""
+SCHEMA_STATEMENTS = [
+    """CREATE TABLE IF NOT EXISTS students (
+        id SERIAL PRIMARY KEY,
+        student_code TEXT UNIQUE NOT NULL,
+        grad_year TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS scores (
+        id SERIAL PRIMARY KEY,
+        student_id INTEGER NOT NULL REFERENCES students(id),
+        subject TEXT NOT NULL,
+        period TEXT NOT NULL,
+        score REAL NOT NULL,
+        uploaded_at TEXT NOT NULL,
+        UNIQUE(student_id, subject, period)
+    )""",
+    """CREATE TABLE IF NOT EXISTS column_mappings (
+        id SERIAL PRIMARY KEY,
+        subject TEXT NOT NULL UNIQUE,
+        student_col TEXT NOT NULL,
+        score_col TEXT NOT NULL,
+        date_col TEXT NOT NULL DEFAULT ''
+    )""",
+]
 
 SUBJECTS = ['reading', 'writing', 'language']
 PROFICIENT_THRESHOLD = 3
@@ -38,130 +39,136 @@ APPROACHING_THRESHOLD = 2
 
 @contextmanager
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
     try:
         yield conn
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
 
 def init_db():
-    with get_conn() as conn:
-        conn.executescript(SCHEMA)
-        for migration in [
-            "ALTER TABLE column_mappings ADD COLUMN date_col TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE students ADD COLUMN grad_year TEXT",
-        ]:
-            try:
-                conn.execute(migration)
-            except Exception:
-                pass
+    for stmt in SCHEMA_STATEMENTS:
+        with get_conn() as conn:
+            conn.cursor().execute(stmt)
+    for migration in [
+        "ALTER TABLE column_mappings ADD COLUMN IF NOT EXISTS date_col TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS grad_year TEXT",
+    ]:
+        try:
+            with get_conn() as conn:
+                conn.cursor().execute(migration)
+        except Exception:
+            pass
 
 
 def get_column_mapping(subject):
     with get_conn() as conn:
-        row = conn.execute(
-            'SELECT * FROM column_mappings WHERE subject = ?', (subject,)
-        ).fetchone()
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM column_mappings WHERE subject = %s', (subject,))
+        row = cur.fetchone()
         return dict(row) if row else None
 
 
 def save_column_mapping(subject, student_col, score_col, date_col):
     with get_conn() as conn:
-        conn.execute(
-            'INSERT OR REPLACE INTO column_mappings (subject, student_col, score_col, date_col) VALUES (?, ?, ?, ?)',
+        conn.cursor().execute(
+            '''INSERT INTO column_mappings (subject, student_col, score_col, date_col)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (subject) DO UPDATE
+               SET student_col = EXCLUDED.student_col,
+                   score_col = EXCLUDED.score_col,
+                   date_col = EXCLUDED.date_col''',
             (subject, student_col, score_col, date_col)
         )
 
 
 def get_all_grad_years():
     with get_conn() as conn:
-        rows = conn.execute(
-            'SELECT DISTINCT grad_year FROM students WHERE grad_year IS NOT NULL ORDER BY grad_year'
-        ).fetchall()
-        return [r['grad_year'] for r in rows]
+        cur = conn.cursor()
+        cur.execute('SELECT DISTINCT grad_year FROM students WHERE grad_year IS NOT NULL ORDER BY grad_year')
+        return [r['grad_year'] for r in cur.fetchall()]
 
 
 def insert_scores(records, grad_year=None):
-    """records: list of (student_code, subject, period, score)"""
     now = datetime.now().isoformat()
     with get_conn() as conn:
+        cur = conn.cursor()
         for student_code, subject, period, score in records:
-            conn.execute(
-                'INSERT OR IGNORE INTO students (student_code, grad_year) VALUES (?, ?)',
+            cur.execute(
+                'INSERT INTO students (student_code, grad_year) VALUES (%s, %s) ON CONFLICT (student_code) DO NOTHING',
                 (student_code, grad_year)
             )
             if grad_year:
-                conn.execute(
-                    'UPDATE students SET grad_year = ? WHERE student_code = ? AND grad_year IS NULL',
+                cur.execute(
+                    'UPDATE students SET grad_year = %s WHERE student_code = %s AND grad_year IS NULL',
                     (grad_year, student_code)
                 )
-            student_id = conn.execute(
-                'SELECT id FROM students WHERE student_code = ?', (student_code,)
-            ).fetchone()['id']
-            conn.execute(
+            cur.execute('SELECT id FROM students WHERE student_code = %s', (student_code,))
+            student_id = cur.fetchone()['id']
+            cur.execute(
                 '''INSERT INTO scores (student_id, subject, period, score, uploaded_at)
-                   VALUES (?, ?, ?, ?, ?)
-                   ON CONFLICT(student_id, subject, period)
-                   DO UPDATE SET score=excluded.score, uploaded_at=excluded.uploaded_at''',
+                   VALUES (%s, %s, %s, %s, %s)
+                   ON CONFLICT (student_id, subject, period)
+                   DO UPDATE SET score = EXCLUDED.score, uploaded_at = EXCLUDED.uploaded_at''',
                 (student_id, subject, period, score, now)
             )
 
 
 def check_period_exists(subject, period, grad_year=None):
     with get_conn() as conn:
+        cur = conn.cursor()
         if grad_year:
-            row = conn.execute(
+            cur.execute(
                 '''SELECT COUNT(*) as cnt FROM scores s
                    JOIN students st ON st.id = s.student_id
-                   WHERE s.subject = ? AND s.period = ? AND st.grad_year = ?''',
+                   WHERE s.subject = %s AND s.period = %s AND st.grad_year = %s''',
                 (subject, period, grad_year)
-            ).fetchone()
+            )
         else:
-            row = conn.execute(
-                'SELECT COUNT(*) as cnt FROM scores WHERE subject = ? AND period = ?',
+            cur.execute(
+                'SELECT COUNT(*) as cnt FROM scores WHERE subject = %s AND period = %s',
                 (subject, period)
-            ).fetchone()
-        return row['cnt'] > 0
+            )
+        return cur.fetchone()['cnt'] > 0
 
 
 def get_student_by_code(code):
     with get_conn() as conn:
-        row = conn.execute(
-            'SELECT * FROM students WHERE student_code = ?', (code,)
-        ).fetchone()
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM students WHERE student_code = %s', (code,))
+        row = cur.fetchone()
         return dict(row) if row else None
 
 
 def get_score_history(student_id):
     with get_conn() as conn:
-        rows = conn.execute(
-            'SELECT subject, period, score FROM scores WHERE student_id = ? ORDER BY period ASC',
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT subject, period, score FROM scores WHERE student_id = %s ORDER BY period ASC',
             (student_id,)
-        ).fetchall()
-        return [dict(r) for r in rows]
+        )
+        return [dict(r) for r in cur.fetchall()]
 
 
 def get_all_periods():
     with get_conn() as conn:
-        rows = conn.execute(
-            'SELECT DISTINCT period FROM scores ORDER BY period ASC'
-        ).fetchall()
-        return [r['period'] for r in rows]
+        cur = conn.cursor()
+        cur.execute('SELECT DISTINCT period FROM scores ORDER BY period ASC')
+        return [r['period'] for r in cur.fetchall()]
 
 
 def get_dashboard_data(subject=None, grad_year=None):
     with get_conn() as conn:
+        cur = conn.cursor()
         if grad_year:
-            students = conn.execute(
-                'SELECT * FROM students WHERE grad_year = ? ORDER BY student_code', (grad_year,)
-            ).fetchall()
+            cur.execute('SELECT * FROM students WHERE grad_year = %s ORDER BY student_code', (grad_year,))
         else:
-            students = conn.execute(
-                'SELECT * FROM students ORDER BY student_code'
-            ).fetchall()
+            cur.execute('SELECT * FROM students ORDER BY student_code')
+        students = cur.fetchall()
         subjects = [subject] if subject else SUBJECTS
 
         result = []
@@ -171,10 +178,11 @@ def get_dashboard_data(subject=None, grad_year=None):
 
             has_data = False
             for subj in subjects:
-                scores_rows = conn.execute(
-                    'SELECT period, score FROM scores WHERE student_id = ? AND subject = ? ORDER BY period ASC',
+                cur.execute(
+                    'SELECT period, score FROM scores WHERE student_id = %s AND subject = %s ORDER BY period ASC',
                     (sid, subj)
-                ).fetchall()
+                )
+                scores_rows = cur.fetchall()
 
                 if scores_rows:
                     has_data = True
@@ -208,6 +216,7 @@ def get_dashboard_data(subject=None, grad_year=None):
 
 def get_summary_stats(subject=None, grad_year=None):
     with get_conn() as conn:
+        cur = conn.cursor()
         subjects = [subject] if subject else SUBJECTS
 
         all_latest_scores = []
@@ -216,28 +225,28 @@ def get_summary_stats(subject=None, grad_year=None):
 
         for subj in subjects:
             if grad_year:
-                rows = conn.execute('''
+                cur.execute('''
                     SELECT s.student_id, s.score, s.uploaded_at
                     FROM scores s
                     JOIN students st ON st.id = s.student_id
-                    WHERE s.subject = ? AND st.grad_year = ?
+                    WHERE s.subject = %s AND st.grad_year = %s
                       AND s.period = (
                           SELECT MAX(period) FROM scores
-                          WHERE subject = ? AND student_id = s.student_id
+                          WHERE subject = %s AND student_id = s.student_id
                       )
-                ''', (subj, grad_year, subj)).fetchall()
+                ''', (subj, grad_year, subj))
             else:
-                rows = conn.execute('''
+                cur.execute('''
                     SELECT s.student_id, s.score, s.uploaded_at
                     FROM scores s
-                    WHERE s.subject = ?
+                    WHERE s.subject = %s
                       AND s.period = (
                           SELECT MAX(period) FROM scores
-                          WHERE subject = ? AND student_id = s.student_id
+                          WHERE subject = %s AND student_id = s.student_id
                       )
-                ''', (subj, subj)).fetchall()
+                ''', (subj, subj))
 
-            for r in rows:
+            for r in cur.fetchall():
                 all_latest_scores.append(r['score'])
                 if last_upload is None or r['uploaded_at'] > last_upload:
                     last_upload = r['uploaded_at']
@@ -271,35 +280,37 @@ def get_summary_stats(subject=None, grad_year=None):
 
 def get_period_averages(subject=None, grad_year=None):
     with get_conn() as conn:
+        cur = conn.cursor()
         conditions = []
         params = []
         if subject:
-            conditions.append("s.subject = ?")
+            conditions.append("s.subject = %s")
             params.append(subject)
         if grad_year:
-            conditions.append("st.grad_year = ?")
+            conditions.append("st.grad_year = %s")
             params.append(grad_year)
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        rows = conn.execute(f"""
-            SELECT s.subject, s.period, ROUND(AVG(s.score), 2) as avg_score
+        cur.execute(f"""
+            SELECT s.subject, s.period, ROUND(AVG(s.score)::numeric, 2) as avg_score
             FROM scores s
             JOIN students st ON s.student_id = st.id
             {where}
             GROUP BY s.subject, s.period
             ORDER BY s.subject, s.period
-        """, params).fetchall()
-        return [dict(r) for r in rows]
+        """, params)
+        return [dict(r) for r in cur.fetchall()]
 
 
 def get_all_scores_for_report():
     with get_conn() as conn:
-        rows = conn.execute('''
+        cur = conn.cursor()
+        cur.execute('''
             SELECT st.student_code, s.subject, s.period, s.score
             FROM scores s
             JOIN students st ON st.id = s.student_id
             ORDER BY st.student_code, s.subject, s.period
-        ''').fetchall()
-        return [dict(r) for r in rows]
+        ''')
+        return [dict(r) for r in cur.fetchall()]
 
 
 def _get_proficiency(score):
