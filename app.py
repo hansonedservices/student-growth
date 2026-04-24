@@ -25,6 +25,7 @@ def do_enumerate(iterable):
     return list(enumerate(iterable))
 
 os.makedirs('uploads', exist_ok=True)
+db.init_db()
 
 DATE_FORMATS = [
     '%Y-%m-%d %H:%M:%S',
@@ -83,7 +84,6 @@ def process_csv(rows, subject, student_col, score_col, date_col, grad_year=None)
 
 @app.route('/')
 def dashboard():
-    import sys; print("MAIN_APP_RUNNING", sys.argv[0], file=sys.stderr)
     subject = request.args.get('subject', 'all')
     grad_year = request.args.get('grad_year', 'all')
     filter_subject = subject if subject != 'all' else None
