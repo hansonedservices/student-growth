@@ -27,6 +27,7 @@
     <input type="hidden" name="period" value="{{ warn_period }}">
     <input type="hidden" name="grad_year" value="{{ warn_grad_year or '' }}">
     <input type="hidden" name="overwrite" value="yes">
+    <input type="hidden" name="pending_file" value="{{ warn_pending_file or '' }}">
     <button type="submit" class="btn btn-primary btn-sm">Yes, overwrite</button>
     <a href="/upload" class="btn btn-outline btn-sm">Cancel</a>
   </form>

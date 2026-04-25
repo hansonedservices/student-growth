@@ -141,15 +141,36 @@ def upload():
     if request.method == 'POST':
         subject = request.form.get('subject', '').strip()
         grad_year = request.form.get('grad_year', '').strip() or None
-        file = request.files.get('file')
         overwrite = request.form.get('overwrite') == 'yes'
 
-        if not subject or not file or file.filename == '':
+        if not subject or subject not in db.SUBJECTS:
+            return render_template('upload.html', subjects=db.SUBJECTS, error='Invalid subject.')
+
+        # Overwrite confirmation: reload from saved temp file, no new file needed
+        if overwrite:
+            temp_path = os.path.join('uploads', f'pending_overwrite_{subject}.csv')
+            if not os.path.exists(temp_path):
+                return render_template('upload.html', subjects=db.SUBJECTS,
+                                       error='Session expired. Please re-upload your file.')
+            with open(temp_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+            reader = csv.DictReader(io.StringIO(content))
+            rows = list(reader)
+            mapping = db.get_column_mapping(subject)
+            errors = process_csv(rows, subject, mapping['student_col'],
+                                 mapping['score_col'], mapping['date_col'], grad_year)
+            if errors:
+                return render_template('upload.html', subjects=db.SUBJECTS, errors=errors[:10])
+            return redirect(url_for('dashboard'))
+
+        file = request.files.get('file')
+        if not file or file.filename == '':
             return render_template('upload.html', subjects=db.SUBJECTS,
                                    error='Please select a subject and a file.')
-
-        if subject not in db.SUBJECTS:
-            return render_template('upload.html', subjects=db.SUBJECTS, error='Invalid subject.')
 
         if not grad_year:
             grad_year = detect_grad_year(file.filename)
@@ -178,15 +199,19 @@ def upload():
                                     grad_year=grad_year or ''))
 
         # Check for duplicate period using first row's date
-        if not overwrite and rows:
+        if rows:
             try:
                 first_period = parse_period(str(rows[0][mapping['date_col']]))
                 if db.check_period_exists(subject, first_period, grad_year):
+                    temp_path = os.path.join('uploads', f'pending_overwrite_{subject}.csv')
+                    with open(temp_path, 'w', newline='', encoding='utf-8') as f:
+                        f.write(content)
                     return render_template('upload.html', subjects=db.SUBJECTS,
                                            warn_overwrite=True,
                                            warn_subject=subject,
                                            warn_period=first_period,
-                                           warn_grad_year=grad_year)
+                                           warn_grad_year=grad_year,
+                                           warn_pending_file=os.path.basename(temp_path))
             except (ValueError, KeyError):
                 pass
 
